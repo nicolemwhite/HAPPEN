@@ -1,0 +1,972 @@
+---
+title: "HAPPEN study analysis v1.4"
+author: "NW, BM"
+date: "2026-02-19"
+output:
+  bookdown::html_document2: 
+    fig_caption: true
+    number_sections: true
+    global_numbering: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+source('99_packages.R')
+source('99_functions.R')
+library(kableExtra)
+load('processed data/trial_data.rda')
+load('processed data/cluster_time_mapping.rda')
+```
+
+
+# Version details
+
+Current version includes final data check for manuscript preparation.
+
+This report summarises primary, secondary and tertiary outcomes from the HAPPEN trial. Analyses follow details outlined in the Statistical Analysis Plan (https://doi.org/10.1101/2025.08.14.25333719).
+
+Relevant descriptions from the SAP are provided in subsequent sections.
+
+# Study design 
+
+The HAPPEN study design was a stepped-wedge cluster randomised trial across three public hospitals in Australia. The study design was defined by nine clusters, where a single ward was defined as a cluster. Three wards from each participating hospital were enrolled in the study. Wards within each hospital were randomised to one of three treatment sequences, which determined their transition from the control condition (current standard of oral care) to the intervention condition (oral care bundle). No transition phase was assumed between control and intervention conditions.
+
+The planned study design specified all clusters starting in the control condition for the first three months. A single ward from each hospital was then scheduled to switch from the control to intervention condition every 2 months, resuliting in a total trial length of 12 months.
+
+
+```{r fig-study-design,fig.cap='Observed treatment sequences'}
+plot_dat <- cluster_time_mapping %>% distinct(study_period,study_month_number,cluster,intervention) %>% mutate_at('intervention',~case_match(.,0~'Control',1~'Intervention',NA~'No data collection')) %>% slice_min(intervention,by=c(cluster,study_period,study_month_number)) %>% mutate_at('cluster',~factor(.,levels=rev(unique(.)))) 
+
+ggplot(plot_dat,aes(study_month_number,cluster,fill=intervention))+geom_tile(colour='white')+scale_x_continuous('Time step',breaks=1:15)+scale_y_discrete('Cluster')+scale_fill_manual(values=cbPalette[5:6])+g.theme
+
+
+```
+
+Observed treatment sequences match the planned design for Hospitals 1 and 2, starting in June 2024. Trial commencement was delayed in Hospital 3 was delayed by two months. The observed treatment sequences at Hospital 3 were therefore shifted to start in August 2024. All hospitals collected data for 12 months. The observed treatment sequences by cluster are in Figure \@ref(fig:fig-study-design).
+
+
+
+# Inclusion/exclusion criteria
+
+Data were provided for 12,474 REDCap records. Initial data cleaning assessed records based on inclusion/exclusion criteria for study enrollment and timing of infections relative to study ward admission and discharge dates. 
+
+Additional record exclusions were based on the availability of a patient's medical records at the time surveillance, missing ward admission and discharges dates need to define patient time at-risk, and time spent on a study ward. A summary of numbers excluded is provided below.
+
+* Under 18 years of age: `r N[["<18 years"]]`
+* No medical record available at the time of surveillance (Other reasons): `r N[["No medical record available - excluded for other reasons"]]`
+* No hospital and ward identifiers: `r N[["Unknown hospital/ward"]]`
+* Duplicate records: `r N[["Duplicate records"]]`
+* Missing ward admission and/or discharge dates: `r N[["Missing ward admission and/or discharge dates"]]`
+* Admitted to a study ward for less than 48 hours: `r N[["On study ward for <48hr"]]`
+* Discharged from a study ward before the start of the cluster control period: `r N[["Discharged from study ward before control start date"]]`
+
+
+For remaining records, the following infection numbers were excluded based on SAP attribution rules (SAP, p8 - 9).
+
+* Infection was acquired before study ward admission: `r N[["Excluded infections: Infections acquired before study ward admission"]]`.
+* Infection acquired on day or study ward admission of within the first 48 hours of admission: `r N[["Excluded infections: Infection acquired on day or study ward admission of within the first 48 hours of admission"]] %>% format(big.mark=',')`.
+* Infection acquired within 48 hours of control start: `r N[["Excluded infections: Infection acquired within 2 days of control start"]]`.
+* Infection acquired more than 48 hours after a cluster's intervention end date: `r N[["Excluded infections: Infection acquired 2+ days after intervention end"]]`.
+* VAP: `r N[["Infections excluded: VAP"]]`; based on date of HAP onset relative to recorded ventilator start and end dates.
+
+The final sample size for analysis was `r nrow(dat) %>% format(big.mark=',')`.
+
+# Descriptive statistics
+
+Cohort characteristics were summarised using descriptive statistics by study hospital (Hospital 1, Hospital 2, Hospital 2), study condition at the time of ward admission (Control, Intervention), primary outcome assessment (no HAP, HAP), and overall infection outcome based on assessment of HAP, lower-upper respiratory infections (LURI) and EENT-Oral (No infection, 1 or more infections).
+
+For each cohort stratification in Tables \@ref(tab:tab-desc-hosp) to \@ref(tab:tab-desc-infection), categorical variables are reported as total events/total records with corresponding percentages. Continuous variables are reported as quantiles, Median (Q1 to Q3), and means with standard deviations, Mean (SD). Total sample size per group are reported in each table.
+
+
+```{r tab-desc-hosp,message=F,warning=F}
+
+dat_base <- dat
+#add age based on year of birth
+dat_base <- dat_base %>% mutate(age=year(date_admission_ward)-as.numeric(yearofbirth))
+#add days spent on study ward
+dat_base <- dat_base %>% mutate(ward_los = as.numeric(date_discharge_ward - date_admission_ward,'days'),hospital_los = as.numeric(date_discharge_hospital - date_admission_hospital,'days'))
+#update hospital label
+dat_base <- dat_base %>% mutate_at('hospital',~paste('Hospital',.))
+#collapse transfer codes
+dat_base <- dat_base %>% mutate_at('reasonfordischargefromward',~if_else(grepl('Transferred',.),'Transferred',.))
+sample_sizes<-dat_base %>% reframe(N=n(),.by=hospital) %>% mutate_at('N',~format(.,big.mark=',')) %>% pivot_wider(names_from=hospital,values_from=N)
+ad_all<-dat_base %>% reframe('All patients'=format(n(),big.mark=','))
+
+
+ftab.desc = NULL
+ftab.desc[['Total records']]<-c(ad_all,sample_sizes)
+ftab.desc[['Gender: Female']] = make_cat_tab_row(indata=dat_base,invar='gender',choose.level = 'Female',grouped=T,group_var='hospital',label=NULL)
+ftab.desc[['Age, years']] = make_cont_tab_row(indata=dat_base,invar='age',grouped=T,group_var='hospital')
+ftab.desc[['Days on study ward']] = make_cont_tab_row(indata=dat_base,invar='ward_los',grouped=T,group_var='hospital')
+ftab.desc[['Hospital length of stay, days']] = make_cont_tab_row(indata=dat_base,invar='hospital_los',grouped=T,group_var='hospital')
+ftab.desc[['Reason for discharge from ward']] = make_cat_tab_row(indata=dat_base,invar='reasonfordischargefromward',choose.level = 'all',grouped=T,group_var='hospital',label=NULL) 
+ftab.desc[['Receiving antimicrobial therapy excluding surgical prophylaxis']] = make_cat_tab_row(indata=dat_base,invar='receivingantimicrobialtherapyexcludingsurgicalprophylaxis',choose.level = 'all',grouped=T,group_var='hospital',label=NULL)
+ftab.desc[['Documented fever']] = make_cat_tab_row(indata=dat_base,invar='documentedfever_38cduringtheirstayontheward',choose.level = 'all',grouped=T,group_var='hospital',label=NULL)
+ftab.desc[['Proton pump inhibitor']] = make_cat_tab_row(indata=dat_base,invar='proton_pump_inhibitor',choose.level = 'all',grouped=T,group_var='hospital',label=NULL)
+ftab.desc[['History of stroke']] = make_cat_tab_row(indata=dat_base,invar='history_stroke',choose.level = 'all',grouped=T,group_var='hospital',label=NULL)
+ftab.desc[['History of dysphagia']] = make_cat_tab_row(indata=dat_base,invar='history_dysphagia',choose.level = 'all',grouped=T,group_var='hospital',label=NULL)
+ftab.desc[['History of dementia']] = make_cat_tab_row(indata=dat_base,invar='history_dementia',choose.level = 'all',grouped=T,group_var='hospital',label=NULL)
+
+ftab.desc<-bind_rows(ftab.desc,.id='Characteristic') %>% mutate_at('Characteristic',~if_else(!is.na(level),paste0(.,': ',level),.))  %>% select(Characteristic,`All patients`,`Hospital 1`,`Hospital 2`,`Hospital 3`) %>% filter(!grepl(': No',Characteristic)) 
+
+knitr::kable(ftab.desc, format = "html", escape = FALSE,caption="Cohort characteristics by study hospital")  %>% kable_paper("striped",full_width = F, font_size = 20)
+#flextable(ftab.desc) %>% width(width=c(4,1.5,1.5,1.5,1.5)) %>% fontsize(size=12) %>% theme_box() %>% set_caption('Cohort characteristics by study hospital')
+
+```
+
+
+```{r tab-desc-condition,message=F,warning=F}
+
+ad<- cluster_time_mapping %>% select(cluster,date_daily,intervention) %>% mutate_at('intervention',~case_match(.,0~'Control',1~'Intervention'))
+dat_base <- dat %>% left_join(ad,by=join_by(cluster,date_admission_ward==date_daily),relationship='many-to-many') %>% mutate_at('intervention',~if_else(is.na(.) & date_admission_ward<=date_control_start,'Control',.)) #if admitted before the control start date and discharged in 
+#add age based on year of birth
+dat_base <- dat_base %>% mutate(age=year(date_admission_ward)-as.numeric(yearofbirth))
+#add days spent on study ward
+dat_base <- dat_base %>% mutate(ward_los = as.numeric(date_discharge_ward - date_admission_ward,'days'),hospital_los = as.numeric(date_discharge_hospital - date_admission_hospital,'days'))
+
+#collapse transfer codes
+dat_base <- dat_base %>% mutate_at('reasonfordischargefromward',~if_else(grepl('Transferred',.),'Transferred',.))
+
+
+sample_sizes<-dat_base %>% reframe(N=n(),.by=intervention) %>% mutate_at('N',~format(.,big.mark=',')) %>% pivot_wider(names_from=intervention,values_from=N)
+ad_all<-dat_base %>% reframe('All patients'=format(n(),big.mark=','))
+
+#by hospital
+sample_sizes_h <-dat_base %>% reframe(N=n(),.by=c(hospital,intervention)) %>% mutate_at('N',~format(.,big.mark=',')) %>% pivot_wider(names_from=intervention,values_from=N) %>%  rename(level=hospital)
+ad_all_h <-dat_base %>% reframe(`All patients`=format(n(),big.mark=','),.by=c(hospital)) %>%  rename(level=hospital)
+
+
+ftab.desc = NULL
+ftab.desc[['Total records']]<-c(ad_all,sample_sizes)
+ftab.desc[['Hospital']] = inner_join(ad_all_h,sample_sizes_h,by=join_by(level))
+ftab.desc[['Gender: Female']] = make_cat_tab_row(indata=dat_base,invar='gender',choose.level = 'Female',grouped=T,group_var='intervention',label=NULL)
+ftab.desc[['Age, years']] = make_cont_tab_row(indata=dat_base,invar='age',grouped=T,group_var='intervention')
+ftab.desc[['Days on study ward']] = make_cont_tab_row(indata=dat_base,invar='ward_los',grouped=T,group_var='intervention')
+ftab.desc[['Hospital length of stay, days']] = make_cont_tab_row(indata=dat_base,invar='hospital_los',grouped=T,group_var='intervention')
+ftab.desc[['Reason for discharge from ward']] = make_cat_tab_row(indata=dat_base,invar='reasonfordischargefromward',choose.level = 'all',grouped=T,group_var='intervention',label=NULL) 
+ftab.desc[['Receiving antimicrobial therapy excluding surgical prophylaxis']] = make_cat_tab_row(indata=dat_base,invar='receivingantimicrobialtherapyexcludingsurgicalprophylaxis',choose.level = 'all',grouped=T,group_var='intervention',label=NULL)
+ftab.desc[['Documented fever']] = make_cat_tab_row(indata=dat_base,invar='documentedfever_38cduringtheirstayontheward',choose.level = 'all',grouped=T,group_var='intervention',label=NULL)
+ftab.desc[['Proton pump inhibitor']] = make_cat_tab_row(indata=dat_base,invar='proton_pump_inhibitor',choose.level = 'all',grouped=T,group_var='intervention',label=NULL)
+ftab.desc[['History of stroke']] = make_cat_tab_row(indata=dat_base,invar='history_stroke',choose.level = 'all',grouped=T,group_var='intervention',label=NULL)
+ftab.desc[['History of dysphagia']] = make_cat_tab_row(indata=dat_base,invar='history_dysphagia',choose.level = 'all',grouped=T,group_var='intervention',label=NULL)
+ftab.desc[['History of dementia']] = make_cat_tab_row(indata=dat_base,invar='history_dementia',choose.level = 'all',grouped=T,group_var='intervention',label=NULL)
+
+ftab.desc<-bind_rows(ftab.desc,.id='Characteristic') %>% mutate_at('Characteristic',~if_else(!is.na(level),paste0(.,': ',level),.))  %>% select(Characteristic,`All patients`,Control,Intervention) %>% filter(!grepl(': No',Characteristic)) 
+
+knitr::kable(ftab.desc, format = "html", escape = FALSE,caption='Cohort characteristics by study condition')   %>% kable_paper("striped",full_width = F, font_size = 20)
+```
+
+
+```{r tab-desc-hap,message=F,warning=F}
+
+dat_base <- dat %>% mutate_at('hap',~case_match(.,1~"HAP",0~"No HAP"))
+#add age based on year of birth
+dat_base <- dat_base %>% mutate(age=year(date_admission_ward)-as.numeric(yearofbirth))
+#add days spent on study ward
+dat_base <- dat_base %>% mutate(ward_los = as.numeric(date_discharge_ward - date_admission_ward,'days'),hospital_los = as.numeric(date_discharge_hospital - date_admission_hospital,'days'))
+
+#collapse transfer codes
+dat_base <- dat_base %>% mutate_at('reasonfordischargefromward',~if_else(grepl('Transferred',.),'Transferred',.))
+
+sample_sizes<-dat_base %>% reframe(N=n(),.by=hap) %>% mutate_at('N',~format(.,big.mark=',')) %>% pivot_wider(names_from=hap,values_from=N)
+ad_all<-dat_base %>% reframe('All patients'=format(n(),big.mark=','))
+
+#by hospital
+sample_sizes_h <-dat_base %>% reframe(N=n(),.by=c(hospital,hap)) %>% mutate_at('N',~format(.,big.mark=',')) %>% pivot_wider(names_from=hap,values_from=N) %>%  rename(level=hospital)
+ad_all_h <-dat_base %>% reframe(`All patients`=format(n(),big.mark=','),.by=c(hospital)) %>%  rename(level=hospital)
+
+ftab.desc = NULL
+ftab.desc[['Total records']]<-c(ad_all,sample_sizes)
+ftab.desc[['Hospital']] = inner_join(ad_all_h,sample_sizes_h,by=join_by(level))
+ftab.desc[['Gender: Female']] = make_cat_tab_row(indata=dat_base,invar='gender',choose.level = 'Female',grouped=T,group_var='hap',label=NULL)
+ftab.desc[['Age, years']] = make_cont_tab_row(indata=dat_base,invar='age',grouped=T,group_var='hap')
+ftab.desc[['Days on study ward']] = make_cont_tab_row(indata=dat_base,invar='ward_los',grouped=T,group_var='hap')
+ftab.desc[['Hospital length of stay, days']] = make_cont_tab_row(indata=dat_base,invar='hospital_los',grouped=T,group_var='hap')
+ftab.desc[['Reason for discharge from ward']] = make_cat_tab_row(indata=dat_base,invar='reasonfordischargefromward',choose.level = 'all',grouped=T,group_var='hap',label=NULL) 
+ftab.desc[['Receiving antimicrobial therapy excluding surgical prophylaxis']] = make_cat_tab_row(indata=dat_base,invar='receivingantimicrobialtherapyexcludingsurgicalprophylaxis',choose.level = 'all',grouped=T,group_var='hap',label=NULL)
+ftab.desc[['Documented fever']] = make_cat_tab_row(indata=dat_base,invar='documentedfever_38cduringtheirstayontheward',choose.level = 'all',grouped=T,group_var='hap',label=NULL)
+ftab.desc[['Proton pump inhibitor']] = make_cat_tab_row(indata=dat_base,invar='proton_pump_inhibitor',choose.level = 'all',grouped=T,group_var='hap',label=NULL)
+ftab.desc[['History of stroke']] = make_cat_tab_row(indata=dat_base,invar='history_stroke',choose.level = 'all',grouped=T,group_var='hap',label=NULL)
+ftab.desc[['History of dysphagia']] = make_cat_tab_row(indata=dat_base,invar='history_dysphagia',choose.level = 'all',grouped=T,group_var='hap',label=NULL)
+ftab.desc[['History of dementia']] = make_cat_tab_row(indata=dat_base,invar='history_dementia',choose.level = 'all',grouped=T,group_var='hap',label=NULL)
+
+ftab.desc<-bind_rows(ftab.desc,.id='Characteristic') %>% mutate_at('Characteristic',~if_else(!is.na(level),paste0(.,': ',level),.))  %>% select(Characteristic,`All patients`,`No HAP`,HAP) %>% filter(!grepl(': No',Characteristic))
+
+knitr::kable(ftab.desc, format = "html", escape = FALSE,caption='Cohort characteristics by HAP')   %>% kable_paper("striped",full_width = F, font_size = 20)
+
+```
+
+
+```{r tab-desc-sequence,message=F,warning=F}
+dat_base <- dat %>% mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3'))
+#add age based on year of birth
+dat_base <- dat_base %>% mutate(age=year(date_admission_ward)-as.numeric(yearofbirth))
+#add days spent on study ward
+dat_base <- dat_base %>% mutate(ward_los = as.numeric(date_discharge_ward - date_admission_ward,'days'),hospital_los = as.numeric(date_discharge_hospital - date_admission_hospital,'days'))
+
+#collapse transfer codes
+dat_base <- dat_base %>% mutate_at('reasonfordischargefromward',~if_else(grepl('Transferred',.),'Transferred',.))
+sample_sizes<-dat_base %>% reframe(N=n(),.by=treat_seq) %>% mutate_at('N',~format(.,big.mark=',')) %>% pivot_wider(names_from=treat_seq,values_from=N)
+ad_all<-dat_base %>% reframe('All patients'=format(n(),big.mark=','))
+
+
+ftab.desc = NULL
+ftab.desc[['Total records']]<-c(ad_all,sample_sizes)
+ftab.desc[['Gender: Female']] = make_cat_tab_row(indata=dat_base,invar='gender',choose.level = 'Female',grouped=T,group_var='treat_seq',label=NULL)
+ftab.desc[['Age, years']] = make_cont_tab_row(indata=dat_base,invar='age',grouped=T,group_var='treat_seq')
+ftab.desc[['Days on study ward']] = make_cont_tab_row(indata=dat_base,invar='ward_los',grouped=T,group_var='treat_seq')
+ftab.desc[['Hospital length of stay, days']] = make_cont_tab_row(indata=dat_base,invar='hospital_los',grouped=T,group_var='treat_seq')
+ftab.desc[['Reason for discharge from ward']] = make_cat_tab_row(indata=dat_base,invar='reasonfordischargefromward',choose.level = 'all',grouped=T,group_var='treat_seq',label=NULL) 
+ftab.desc[['Receiving antimicrobial therapy excluding surgical prophylaxis']] = make_cat_tab_row(indata=dat_base,invar='receivingantimicrobialtherapyexcludingsurgicalprophylaxis',choose.level = 'all',grouped=T,group_var='treat_seq',label=NULL)
+ftab.desc[['Documented fever']] = make_cat_tab_row(indata=dat_base,invar='documentedfever_38cduringtheirstayontheward',choose.level = 'all',grouped=T,group_var='treat_seq',label=NULL)
+ftab.desc[['Proton pump inhibitor']] = make_cat_tab_row(indata=dat_base,invar='proton_pump_inhibitor',choose.level = 'all',grouped=T,group_var='treat_seq',label=NULL)
+ftab.desc[['History of stroke']] = make_cat_tab_row(indata=dat_base,invar='history_stroke',choose.level = 'all',grouped=T,group_var='treat_seq',label=NULL)
+ftab.desc[['History of dysphagia']] = make_cat_tab_row(indata=dat_base,invar='history_dysphagia',choose.level = 'all',grouped=T,group_var='treat_seq',label=NULL)
+ftab.desc[['History of dementia']] = make_cat_tab_row(indata=dat_base,invar='history_dementia',choose.level = 'all',grouped=T,group_var='treat_seq',label=NULL)
+
+ftab.desc<-bind_rows(ftab.desc,.id='Characteristic') %>% mutate_at('Characteristic',~if_else(!is.na(level),paste0(.,': ',level),.))  %>% select(Characteristic,`All patients`,`Sequence 1`,`Sequence 2`,`Sequence 3`) %>% filter(!grepl(': No',Characteristic)) 
+
+knitr::kable(ftab.desc, format = "html", escape = FALSE,caption="Cohort characteristics by treatment seuquence allocation")  %>% kable_paper("striped",full_width = F, font_size = 20)
+#flextable(ftab.desc) %>% width(width=c(4,1.5,1.5,1.5,1.5)) %>% fontsize(size=12) %>% theme_box() %>% set_caption('Cohort characteristics by study hospital')
+```
+
+
+```{r tab-desc-infection,message=F,warning=F}
+
+dat_base <- dat %>% mutate_at('hai',~case_match(.,1~"Infection",0~"No infection"))
+#add age based on year of birth
+dat_base <- dat_base %>% mutate(age=year(date_admission_ward)-as.numeric(yearofbirth))
+#add days spent on study ward
+dat_base <- dat_base %>% mutate(ward_los = as.numeric(date_discharge_ward - date_admission_ward,'days'),hospital_los = as.numeric(date_discharge_hospital - date_admission_hospital,'days'))
+
+#collapse transfer codes
+dat_base <- dat_base %>% mutate_at('reasonfordischargefromward',~if_else(grepl('Transferred',.),'Transferred',.))
+
+sample_sizes<-dat_base %>% reframe(N=n(),.by=hai) %>% mutate_at('N',~format(.,big.mark=',')) %>% pivot_wider(names_from=hai,values_from=N)
+ad_all<-dat_base %>% reframe('All patients'=format(n(),big.mark=','))
+
+#by hospital
+sample_sizes_h <-dat_base %>% reframe(N=n(),.by=c(hospital,hai)) %>% mutate_at('N',~format(.,big.mark=',')) %>% pivot_wider(names_from=hai,values_from=N) %>%  rename(level=hospital)
+ad_all_h <-dat_base %>% reframe(`All patients`=format(n(),big.mark=','),.by=c(hospital)) %>%  rename(level=hospital)
+
+ftab.desc = NULL
+ftab.desc[['Total records']]<-c(ad_all,sample_sizes)
+ftab.desc[['Hospital']] = inner_join(ad_all_h,sample_sizes_h,by=join_by(level))
+ftab.desc[['Gender: Female']] = make_cat_tab_row(indata=dat_base,invar='gender',choose.level = 'Female',grouped=T,group_var='hai',label=NULL)
+ftab.desc[['Age, years']] = make_cont_tab_row(indata=dat_base,invar='age',grouped=T,group_var='hai')
+ftab.desc[['Days on study ward']] = make_cont_tab_row(indata=dat_base,invar='ward_los',grouped=T,group_var='hai')
+ftab.desc[['Hospital length of stay, days']] = make_cont_tab_row(indata=dat_base,invar='hospital_los',grouped=T,group_var='hai')
+ftab.desc[['Reason for discharge from ward']] = make_cat_tab_row(indata=dat_base,invar='reasonfordischargefromward',choose.level = 'all',grouped=T,group_var='hai',label=NULL) 
+ftab.desc[['Receiving antimicrobial therapy excluding surgical prophylaxis']] = make_cat_tab_row(indata=dat_base,invar='receivingantimicrobialtherapyexcludingsurgicalprophylaxis',choose.level = 'all',grouped=T,group_var='hai',label=NULL)
+ftab.desc[['Documented fever']] = make_cat_tab_row(indata=dat_base,invar='documentedfever_38cduringtheirstayontheward',choose.level = 'all',grouped=T,group_var='hai',label=NULL)
+ftab.desc[['Proton pump inhibitor']] = make_cat_tab_row(indata=dat_base,invar='proton_pump_inhibitor',choose.level = 'all',grouped=T,group_var='hai',label=NULL)
+ftab.desc[['History of stroke']] = make_cat_tab_row(indata=dat_base,invar='history_stroke',choose.level = 'all',grouped=T,group_var='hai',label=NULL)
+ftab.desc[['History of dysphagia']] = make_cat_tab_row(indata=dat_base,invar='history_dysphagia',choose.level = 'all',grouped=T,group_var='hai',label=NULL)
+ftab.desc[['History of dementia']] = make_cat_tab_row(indata=dat_base,invar='history_dementia',choose.level = 'all',grouped=T,group_var='hai',label=NULL)
+
+ftab.desc<-bind_rows(ftab.desc,.id='Characteristic') %>% mutate_at('Characteristic',~if_else(!is.na(level),paste0(.,': ',level),.))  %>% select(Characteristic,`All patients`,`No infection`,Infection) %>% filter(!grepl(': No',Characteristic))
+
+knitr::kable(ftab.desc, format = "html", escape = FALSE,caption='Cohort characteristics by infection outcome')   %>% kable_paper("striped",full_width = F, font_size = 20)
+
+```
+
+
+# Time at-risk
+
+For analysis, the length of each time step was 1 month. Under this design, it was likely that a patient's admission would include more than one study month. This feature of the data is explored in Table \@ref{tab:admission-months}, which shows the total number of records based on the number of study months included in an admission. Based on the design, each study month started on the first Monday of a calendar month. Inclusion in a study month was defined as 1 day or more.
+
+```{r}
+ftab<-dat_atrisk %>% distinct(record_id,study_month_number) %>% count(record_id) %>% count('Number of study months on study ward'=n) %>% mutate('% Total records'=100*n/sum(n)) %>% mutate_at('n',~format(.,big.mark=',')) 
+
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption='Summary of admissions in terms of total study months spent on a study ward',digits=1)   %>% kable_paper("striped",full_width = F, font_size = 20)
+
+```
+
+The next table shows similar numbers but by 6-weekly time steps, which define when different clusters transition from control to intervention.
+
+```{r}
+ftab<-dat_atrisk %>% distinct(record_id,study_period) %>% count(record_id) %>% count('Number of study periods on study ward (1 study period = 3 months)'=n) %>% mutate('% Total records'=100*n/sum(n)) %>% mutate_at('n',~format(.,big.mark=',')) 
+
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption='Summary of admissions in terms of total study periods spent on a study ward',digits=1)   %>% kable_paper("striped",full_width = F, font_size = 20)
+
+```
+
+As an indication of available sample size per cluster-month, \@ref(fig:n-per-step) shows the total number of records included in analysis by cluster and study month.
+
+```{r n-per-step,fig.cap='Total records analysed by cluster and time step',fig.width=10,fig.height=10}
+dat_atrisk %>% distinct(cluster,hospital,ward,record_id,study_month_number) %>% mutate_at('study_month_number',~factor(.,levels=1:15))  %>% count(cluster,hospital,ward,study_month_number) %>% filter(n>1) %>%
+ggplot(aes(study_month_number,n,colour=cluster,group=cluster))+geom_point()+geom_line()+scale_x_discrete('Time step')+scale_y_continuous('Total records analysed',breaks=seq(0,200,25),limits=c(0,200),expand=c(0,NA))+g.theme+theme(axis.text.x=element_text(angle=40,hjust=1))
+```
+
+# Observed infections
+
+
+Table \@ref(tab:obs-infection) show the total number of infections reported by cluster and study condition. The total number of infections as the percentage of admitted patients is also provided.
+
+```{r,obs-infection}
+dat_infections <- dat %>% select(record_id,hap,luri,eent_oral,hai,date_discharge_ward,hospital,ward,cluster) %>% left_join(select(cluster_time_mapping,cluster,date_daily,intervention),by=join_by(cluster,date_discharge_ward==date_daily)) %>% mutate_at('intervention',~replace_na(.,0))
+
+
+ftab<-NULL
+ftab[['HAP']] <- dat_infections %>% reframe(
+  total_patients = n(),
+  total_infections = sum(hap==1),
+  .by=c(hospital,ward,cluster,intervention)
+) 
+ftab[['Lower/Upper respiratory']] <- dat_infections %>% reframe(
+  total_patients = n(),
+  total_infections = sum(luri==1),
+  .by=c(hospital,ward,cluster,intervention)
+) 
+ftab[['EENT-Oral']] <- dat_infections %>% reframe(
+  total_patients = n(),
+  total_infections = sum(eent_oral==1),
+  .by=c(hospital,ward,cluster,intervention)
+) 
+
+ftab<-bind_rows(ftab,.id='infection') %>% mutate(perc=signif(100*total_infections/total_patients,2)) %>% mutate(cell=paste0(total_infections,'/',total_patients,' (',perc,'%)')) %>% select(hospital,ward,cluster,infection,intervention,cell) %>% pivot_wider(names_from=intervention,values_from=cell) %>% rename(Control=`0`,Intervention=`1`) %>%
+  mutate_at('infection',~ factor(.,levels=c('HAP','Lower/Upper respiratory','EENT-Oral'))) %>% arrange(infection,hospital,ward) %>% rename('Hospital'=hospital,'Ward'=ward)
+
+kable(ftab %>% select(-infection), format = "html", escape = FALSE,caption='Total infections reported by cluster and study condition') %>% kable_paper("striped",full_width=T,font_size=20) %>% pack_rows("HAP",1,9) %>% pack_rows("Lower/Upper respiratory",10,18) %>% pack_rows('EENT-Oral',19,27) %>% kable_paper("striped",full_width = F, font_size = 20)
+
+```
+
+
+The next table shows overall observed infections by control and intervention.
+
+```{r obs-infection-all}
+ftab<-dat_infections %>% reframe(total_patients = n(),total_hap=sum(hap==1),total_luri=sum(luri==1),total_eent_oral=sum(eent_oral==1),.by=intervention) %>% pivot_longer(cols=total_hap:total_eent_oral) %>% mutate(cell=paste0(value,' (',round(100*value/total_patients,3),'%)')) %>% select(intervention,name,cell) %>% pivot_wider(names_from=intervention,values_from=cell) %>% rename(Control=`0`,Intervention=`1`,Infection=name) %>% mutate_at('Infection',~case_match(.,'total_hap'~'NV-HAP','total_luri'~'Lower/Upper respiratory','total_eent_oral'~'EENT-Oral'))
+
+ad<-dat_infections %>% reframe(total_patients = n(),total_hap=sum(hap==1),total_luri=sum(luri==1),total_eent_oral=sum(eent_oral==1)) %>% pivot_longer(cols=total_hap:total_eent_oral,names_to='Infection') %>% mutate('All patients'=paste0(value,' (',round(100*value/total_patients,3),'%)')) %>% select(Infection,`All patients`) %>% mutate_at('Infection',~case_match(.,'total_hap'~'NV-HAP','total_luri'~'Lower/Upper respiratory','total_eent_oral'~'EENT-Oral'))
+
+ftab <- left_join(ad,ftab,by=join_by(Infection))
+
+kable(ftab, format = "html", escape = FALSE,caption='Total infections reported by study condition')
+
+```
+
+
+To account for time at-risk, Table \@ref(tab:obs-infection-rates) shows the reported number of infections per 100 patient days at-risk.
+
+Note: days at-risk is defined as the number of days from ward admission to infection or discharge for non-infected patients
+
+```{r,obs-infection-rates}
+
+ftab<-NULL
+ftab[['HAP']] <- dat_atrisk_hap %>% reframe(
+  total_atriskdays = n(),
+  total_infections = length(unique(record_id[hap==1])),
+  .by=c(hospital,ward,cluster,intervention)
+) 
+ftab[['Lower/Upper respiratory']] <- dat_atrisk_luri %>% reframe(
+  total_atriskdays = n(),
+  total_infections = length(unique(record_id[luri==1])),
+  .by=c(hospital,ward,cluster,intervention)
+) 
+ftab[['EENT-Oral']] <- dat_atrisk_eent_oral %>% reframe(
+  total_atriskdays = n(),
+  total_infections = length(unique(record_id[eent_oral==1])),
+  .by=c(hospital,ward,cluster,intervention)
+) 
+
+ftab<-bind_rows(ftab,.id='infection') %>% mutate(rate_per100d = paste0(format(total_atriskdays,big.mark=','),'; ',round(total_infections*100/total_atriskdays,2))) %>% mutate_at('intervention',~case_match(.,0~'Control',1~'Intervention')) %>% select(infection:intervention,rate_per100d) %>% pivot_wider(names_from=intervention,values_from=rate_per100d) %>% mutate_at('infection',~ factor(.,levels=c('HAP','Lower/Upper respiratory','EENT-Oral'))) %>% arrange(infection,hospital,ward) %>% rename('Hospital'=hospital,'Ward'=ward)
+
+
+
+kable(ftab %>% select(-infection),digits=2,format = "html", escape = FALSE,caption='Total infections per 100 at-risk admission days reported by cluster and study condition. The total number of at-risk patient days is defined at the number of days until infection or discharge if not infected') %>% kable_paper("striped",full_width=T,font_size=20) %>% pack_rows("HAP",1,9) %>% pack_rows("Lower/Upper respiratory",10,18) %>% pack_rows('EENT-Oral',19,27) 
+
+```
+
+To assess for general time trends in infection outcomes, Figures \@ref(fig:obs-infection-cluster) and \@ref(fig:obs-infection-hosp) display the observed percentages by cluster and infection type over time. 
+
+* Figure \@ref(fig:obs-infection-cluster) shows percentages by study month (A) and  months relative to the start of intervention exposure (B) by hospital and ward.
+* Figure \@ref(fig:obs-infection-hosp) shows percentages by study month (A) and  months relative to the start of intervention exposure (B) by hospital.
+
+```{r obs-infection-cluster,fig.cap='Unadjusted % of patients with reported infection by cluster and: monthly time step (A), months relative to intervention exposure (B)',fig.width=12,fig.height=20}
+
+dat_atrisk_c <- NULL
+#HAP
+dat_atrisk_c[['NV-HAP']] <- dat_atrisk_hap %>% reframe(n_atrisk = length(unique(record_id)),n_cases=sum(hap),.by=c(cluster,study_month_number)) %>% 
+  mutate(prop=n_cases/n_atrisk) %>% mutate(cil=pmax(0,prop+qnorm(0.025)*sqrt(prop*(1-prop)/n_atrisk)),ciu=prop+qnorm(0.975)*sqrt(prop*(1-prop)/n_atrisk))
+
+#LURI
+dat_atrisk_c[['Lower/Upper respiratory']] <- dat_atrisk_luri %>% reframe(n_atrisk = length(unique(record_id)),n_cases=sum(luri),.by=c(cluster,study_month_number)) %>% 
+  mutate(prop=n_cases/n_atrisk) %>% mutate(cil=pmax(0,prop+qnorm(0.025)*sqrt(prop*(1-prop)/n_atrisk)),ciu=prop+qnorm(0.975)*sqrt(prop*(1-prop)/n_atrisk))
+
+#EENT-O
+dat_atrisk_c[['EENT Oral']] <- dat_atrisk_eent_oral %>% reframe(n_atrisk = length(unique(record_id)),n_cases=sum(eent_oral),.by=c(cluster,study_month_number)) %>% 
+  mutate(prop=n_cases/n_atrisk) %>% mutate(cil=pmax(0,prop+qnorm(0.025)*sqrt(prop*(1-prop)/n_atrisk)),ciu=prop+qnorm(0.975)*sqrt(prop*(1-prop)/n_atrisk))
+
+plot_dat <- bind_rows(dat_atrisk_c,.id='Infection') 
+ad<-cluster_time_mapping %>% filter(intervention==1) %>% slice_min(date_daily,by=cluster) %>% select(cluster,study_month_number) %>% rename(intervention_start=study_month_number) 
+
+#months since intervention start
+plot_dat <- plot_dat %>% left_join(ad,by=join_by(cluster)) %>% mutate(step_since_intervention = study_month_number - intervention_start) %>% mutate_at('cluster',~paste('Cluster',.)) %>% mutate_at('Infection',~factor(.,levels=c('NV-HAP','Lower/Upper respiratory','EENT Oral')))
+
+
+ga<-ggplot(plot_dat,aes(study_month_number,100*prop,ymin=100*cil,ymax=100*ciu,colour=Infection))+geom_point(position=position_dodge(0.4))+geom_errorbar(width=0.2,position=position_dodge(0.4))+scale_x_continuous('Study month',breaks=1:15)+scale_y_continuous('%',breaks=seq(0,14,2))+facet_wrap(~cluster,nrow=3,ncol=3)+theme_minimal()+g.theme
+gb<-ggplot(plot_dat,aes(step_since_intervention,100*prop,ymin=100*cil,ymax=100*ciu,colour=Infection))+geom_point(position=position_dodge(0.4))+geom_errorbar(width=0.2,position=position_dodge(0.4))+scale_x_continuous('Months relative to intervention exposure',breaks=-10:10,expand=c(0,NA))+scale_y_continuous('%',breaks=seq(0,14,2))+facet_wrap(~cluster,nrow=3,ncol=3,scales='free_x')+theme_minimal()+g.theme
+
+
+
+ggpubr::ggarrange(ga,gb,nrow=2,ncol=1,labels=LETTERS[1:2],common.legend = T)
+
+
+```
+
+Figure \@ref(fig:obs-infection-hosp) shows the same data but by treatment sequence instead of cluster.
+
+```{r obs-infection-hosp,fig.cap='Unadjusted % of patients with reported infection by treatment sequence and: monthly time step (A), months relative to intervention exposure (B)',fig.width=10,fig.height=10}
+
+
+dat_atrisk_c <- NULL
+#HAP
+dat_atrisk_c[['NV-HAP']] <- dat_atrisk_hap %>%
+  mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>% reframe(n_atrisk = length(unique(record_id)),n_cases=sum(hap),.by=c(treat_seq,study_month_number)) %>% 
+  mutate(prop=n_cases/n_atrisk) %>% mutate(cil=pmax(0,prop+qnorm(0.025)*sqrt(prop*(1-prop)/n_atrisk)),ciu=prop+qnorm(0.975)*sqrt(prop*(1-prop)/n_atrisk))
+
+#LURI
+dat_atrisk_c[['Lower/Upper respiratory']] <- dat_atrisk_luri %>% 
+  mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>%
+  reframe(n_atrisk = length(unique(record_id)),n_cases=sum(luri),.by=c(treat_seq,study_month_number)) %>% 
+  mutate(prop=n_cases/n_atrisk) %>% mutate(cil=pmax(0,prop+qnorm(0.025)*sqrt(prop*(1-prop)/n_atrisk)),ciu=prop+qnorm(0.975)*sqrt(prop*(1-prop)/n_atrisk))
+
+#EENT-O
+dat_atrisk_c[['EENT Oral']] <- dat_atrisk_eent_oral %>% 
+  mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>%
+  reframe(n_atrisk = length(unique(record_id)),n_cases=sum(eent_oral),.by=c(treat_seq,study_month_number)) %>% 
+  mutate(prop=n_cases/n_atrisk) %>% mutate(cil=pmax(0,prop+qnorm(0.025)*sqrt(prop*(1-prop)/n_atrisk)),ciu=prop+qnorm(0.975)*sqrt(prop*(1-prop)/n_atrisk))
+
+plot_dat <- bind_rows(dat_atrisk_c,.id='Infection') %>% mutate_at('Infection',~factor(.,levels=c('NV-HAP','Lower/Upper respiratory','EENT Oral')))
+
+ga<-ggplot(plot_dat,aes(study_month_number,100*prop,ymin=100*cil,ymax=100*ciu,colour=Infection))+geom_point(position=position_dodge(0.4))+geom_errorbar(width=0.2,position=position_dodge(0.4))+scale_x_continuous('Study month',breaks=1:15)+scale_y_continuous('%',breaks=seq(0,14,2))+facet_wrap(~treat_seq,nrow=1,ncol=3)+theme_minimal()+g.theme
+
+#B
+dat_atrisk_c <- NULL
+#HAP
+dat_atrisk_c[['NV-HAP']] <- dat_atrisk_hap %>% mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>%
+  reframe(n_atrisk = length(unique(record_id)),n_cases=sum(hap),.by=c(treat_seq,cluster,study_month_number)) 
+
+#LURI
+dat_atrisk_c[['Lower/Upper respiratory']] <- dat_atrisk_luri %>% 
+  mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>%
+  reframe(n_atrisk = length(unique(record_id)),n_cases=sum(luri),.by=c(treat_seq,cluster,study_month_number))
+#EENT-O
+dat_atrisk_c[['EENT Oral']] <- dat_atrisk_eent_oral %>% 
+  mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>%
+  reframe(n_atrisk = length(unique(record_id)),n_cases=sum(eent_oral),.by=c(treat_seq,cluster,study_month_number)) 
+
+plot_dat <- bind_rows(dat_atrisk_c,.id='Infection') 
+
+ad<-cluster_time_mapping %>% filter(intervention==1) %>% slice_min(date_daily,by=cluster) %>% select(cluster,study_month_number) %>% rename(intervention_start=study_month_number) 
+
+#months since intervention start
+plot_dat <- plot_dat %>% left_join(ad,by=join_by(cluster)) %>% mutate(step_since_intervention = study_month_number - intervention_start) %>% 
+  reframe(n_atrisk_c = sum(n_atrisk),n_cases_c=sum(n_cases),.by=c(Infection,treat_seq,step_since_intervention)) %>%
+  mutate(prop=n_cases_c/n_atrisk_c) %>% mutate(cil=pmax(0,prop+qnorm(0.025)*sqrt(prop*(1-prop)/n_atrisk_c)),ciu=prop+qnorm(0.975)*sqrt(prop*(1-prop)/n_atrisk_c)) %>%
+  mutate_at('Infection',~factor(.,levels=c('NV-HAP','Lower/Upper respiratory','EENT Oral')))
+
+gb<-ggplot(plot_dat,aes(step_since_intervention,100*prop,ymin=100*cil,ymax=100*ciu,colour=Infection))+geom_point(position=position_dodge(0.4))+geom_errorbar(width=0.2,position=position_dodge(0.4))+scale_x_continuous('Months relative to intervention exposure',breaks=-10:10,expand=c(0,NA))+scale_y_continuous('%',breaks=seq(0,14,2))+facet_wrap(~treat_seq,nrow=1,ncol=3,scales='free_x')+theme_minimal()+g.theme
+
+
+ggpubr::ggarrange(ga,gb,nrow=2,ncol=1,labels=LETTERS[1:2],common.legend = T)
+
+```
+
+Figures \@ref(fig:obs-rate-cluster)presents unadjusted incidence rates per 100 at risk patient-days in the same format as above.
+
+```{r obs-rate-cluster,fig.cap='Unadjusted incidence rates per 100 at risk days by cluster and: monthly time step (A), months relative to intervention exposure (B)',fig.width=12,fig.height=20}
+
+dat_atrisk_c <- NULL
+#HAP
+dat_atrisk_c[['NV-HAP']] <- dat_atrisk_hap %>% reframe(atrisk_days = n(),n_cases=sum(hap),.by=c(cluster,study_month_number)) %>% 
+  mutate(lambda = n_cases*100/atrisk_days,cil=pmax(0,lambda+qnorm(0.025)*sqrt(lambda/n_cases)),ciu=lambda+qnorm(0.975)*sqrt(lambda/n_cases)) %>% mutate_at(c('cil','ciu'),~if_else(is.nan(.),0,.)) 
+#LURI
+dat_atrisk_c[['Lower/Upper respiratory']] <- dat_atrisk_luri %>% reframe(atrisk_days = n(),n_cases=sum(luri),.by=c(cluster,study_month_number)) %>% 
+  mutate(lambda = n_cases*100/atrisk_days,cil=pmax(0,lambda+qnorm(0.025)*sqrt(lambda/n_cases)),ciu=lambda+qnorm(0.975)*sqrt(lambda/n_cases)) %>% mutate_at(c('cil','ciu'),~if_else(is.nan(.),0,.)) 
+
+#EENT-O
+dat_atrisk_c[['EENT Oral']] <- dat_atrisk_eent_oral %>% reframe(atrisk_days = n(),n_cases=sum(eent_oral),.by=c(cluster,study_month_number)) %>% 
+  mutate(lambda = n_cases*100/atrisk_days,cil=pmax(0,lambda+qnorm(0.025)*sqrt(lambda/n_cases)),ciu=lambda+qnorm(0.975)*sqrt(lambda/n_cases)) %>% mutate_at(c('cil','ciu'),~if_else(is.nan(.),0,.)) 
+
+plot_dat <- bind_rows(dat_atrisk_c,.id='Infection') 
+ad<-cluster_time_mapping %>% filter(intervention==1) %>% slice_min(date_daily,by=cluster) %>% select(cluster,study_month_number) %>% rename(intervention_start=study_month_number) 
+
+#months since intervention start
+plot_dat <- plot_dat %>% left_join(ad,by=join_by(cluster)) %>% mutate(step_since_intervention = study_month_number - intervention_start) %>% mutate_at('cluster',~paste('Cluster',.)) %>% mutate_at('Infection',~factor(.,levels=c('NV-HAP','Lower/Upper respiratory','EENT Oral')))
+
+
+ga<-ggplot(plot_dat,aes(study_month_number,lambda,ymin=cil,ymax=ciu,colour=Infection))+geom_point(position=position_dodge(0.4))+geom_errorbar(width=0.2,position=position_dodge(0.4))+scale_x_continuous('Study month',breaks=1:15)+scale_y_continuous('cases per 100 admission days at-risk',breaks=seq(0,3,.25))+facet_wrap(~cluster,nrow=3,ncol=3)+theme_minimal()+g.theme
+gb<-ggplot(plot_dat,aes(step_since_intervention,lambda,ymin=cil,ymax=ciu,colour=Infection))+geom_point(position=position_dodge(0.4))+geom_errorbar(width=0.2,position=position_dodge(0.4))+scale_x_continuous('Months relative to intervention exposure',breaks=-10:10,expand=c(0,NA))+scale_y_continuous('cases per 100 admission days at-risk',breaks=seq(0,3,.25))+facet_wrap(~cluster,nrow=3,ncol=3,scales='free_x')+theme_minimal()+g.theme
+
+
+
+ggpubr::ggarrange(ga,gb,nrow=2,ncol=1,labels=LETTERS[1:2],common.legend = T)
+
+
+```
+
+
+```{r obs-rate-hosp,fig.cap='Unadjusted incidence rates per 100 at risk days by treatment sequence and: monthly time step (A), months relative to intervention exposure (B)',fig.width=10,fig.height=10}
+
+dat_atrisk_c <- NULL
+#HAP
+dat_atrisk_c[['NV-HAP']] <- dat_atrisk_hap %>% mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>% reframe(atrisk_days = n(),n_cases=sum(hap),.by=c(treat_seq,study_month_number)) %>% 
+  mutate(lambda = n_cases*100/atrisk_days,cil=pmax(0,lambda+qnorm(0.025)*sqrt(lambda/n_cases)),ciu=lambda+qnorm(0.975)*sqrt(lambda/n_cases)) %>% mutate_at(c('cil','ciu'),~if_else(is.nan(.),0,.)) 
+#LURI
+dat_atrisk_c[['Lower/Upper respiratory']] <- dat_atrisk_luri %>% mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>% reframe(atrisk_days = n(),n_cases=sum(luri),.by=c(treat_seq,study_month_number)) %>% 
+  mutate(lambda = n_cases*100/atrisk_days,cil=pmax(0,lambda+qnorm(0.025)*sqrt(lambda/n_cases)),ciu=lambda+qnorm(0.975)*sqrt(lambda/n_cases)) %>% mutate_at(c('cil','ciu'),~if_else(is.nan(.),0,.)) 
+
+#EENT-O
+dat_atrisk_c[['EENT Oral']] <- dat_atrisk_eent_oral %>% mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>% reframe(atrisk_days = n(),n_cases=sum(eent_oral),.by=c(treat_seq,study_month_number)) %>% 
+  mutate(lambda = n_cases*100/atrisk_days,cil=pmax(0,lambda+qnorm(0.025)*sqrt(lambda/n_cases)),ciu=lambda+qnorm(0.975)*sqrt(lambda/n_cases)) %>% mutate_at(c('cil','ciu'),~if_else(is.nan(.),0,.)) 
+
+plot_dat <- bind_rows(dat_atrisk_c,.id='Infection') %>% mutate_at('Infection',~factor(.,levels=c('NV-HAP','Lower/Upper respiratory','EENT Oral')))
+
+ga<-ggplot(plot_dat,aes(study_month_number,lambda,ymin=cil,ymax=ciu,colour=Infection))+geom_point(position=position_dodge(0.4))+geom_errorbar(width=0.2,position=position_dodge(0.4))+scale_x_continuous('Study month',breaks=1:15)+scale_y_continuous('cases per 100 admission\n days at-risk',breaks=seq(0,3,.25))+facet_wrap(~treat_seq,nrow=1,ncol=3)+theme_minimal()+g.theme
+
+
+dat_atrisk_c <- NULL
+#HAP
+dat_atrisk_c[['NV-HAP']] <- dat_atrisk_hap %>% 
+  mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>%
+  reframe(atrisk_days = n(),n_cases=sum(hap),.by=c(treat_seq,cluster,study_month_number)) 
+#LURI
+dat_atrisk_c[['Lower/Upper respiratory']] <- dat_atrisk_luri %>% mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>% reframe(atrisk_days = n(),n_cases=sum(luri),.by=c(treat_seq,cluster,study_month_number)) 
+
+#EENT-O
+dat_atrisk_c[['EENT Oral']] <- dat_atrisk_eent_oral %>% mutate(treat_seq = case_when(cluster %in% c(1,4,7) ~ 'Sequence 1',cluster %in% c(2,5,8) ~ 'Sequence 2',cluster %in% c(3,6,9) ~ 'Sequence 3')) %>% reframe(atrisk_days = n(),n_cases=sum(eent_oral),.by=c(treat_seq,cluster,study_month_number)) 
+
+plot_dat <- bind_rows(dat_atrisk_c,.id='Infection') 
+
+ad<-cluster_time_mapping %>% filter(intervention==1) %>% slice_min(date_daily,by=cluster) %>% select(cluster,study_month_number) %>% rename(intervention_start=study_month_number) 
+
+#months since intervention start
+plot_dat <- plot_dat %>% left_join(ad,by=join_by(cluster)) %>% mutate(step_since_intervention = study_month_number - intervention_start) %>% 
+  reframe(atrisk_days_c = sum(atrisk_days),n_cases_c=sum(n_cases),.by=c(Infection,treat_seq,step_since_intervention)) %>%
+  mutate(lambda = n_cases_c*100/atrisk_days_c,cil=pmax(0,lambda+qnorm(0.025)*sqrt(lambda/n_cases_c)),ciu=lambda+qnorm(0.975)*sqrt(lambda/n_cases_c)) %>% mutate_at(c('cil','ciu'),~if_else(is.nan(.),0,.)) %>% mutate_at('Infection',~factor(.,levels=c('NV-HAP','Lower/Upper respiratory','EENT Oral')))
+
+gb<-ggplot(plot_dat,aes(step_since_intervention,lambda,ymin=cil,ymax=ciu,colour=Infection))+geom_point(position=position_dodge(0.4))+geom_errorbar(width=0.2,position=position_dodge(0.4))+scale_x_continuous('Months relative to intervention exposure',breaks=-10:10,expand=c(0,NA))+scale_y_continuous('cases per 100 admission\n days at-risk',breaks=seq(0,3,.25))+facet_wrap(~treat_seq,nrow=1,ncol=3,scales='free_x')+theme_minimal()+g.theme
+
+
+ggpubr::ggarrange(ga,gb,nrow=2,ncol=1,labels=LETTERS[1:2],common.legend=T)
+
+
+```
+
+
+At the patient level, Figures \@ref(fig:cuminc-hap) to \@ref(fig:cuminc-eent-oral) show unadjusted cumulative incidence functions for each infection type by study condition. For each figure, cumulative incidence functions are displayed for all observed lengths of ward stay (left panel), and lengths of stay up to 30 days (right panel).
+
+```{r cuminc-hap,fig.cap='Cumulative incidence of HAP infection by study condition',warning=F,fig.width=10}
+dat.cuminc_hap<-dat_atrisk_hap %>% slice_max(atrisk_day,by=record_id) %>% mutate(hap_c = if_else(atrisk_day<=30,hap,0),atrisk_day_c = pmin(30,atrisk_day))
+
+cuminc.hap<-with(dat.cuminc_hap,cuminc(atrisk_day,hap,group=intervention,strata=cluster)) 
+cuminc.hap_c<-with(dat.cuminc_hap,cuminc(atrisk_day_c,hap_c,group=intervention,strata=cluster)) 
+
+ga<-ggcompetingrisks(cuminc.hap)$data %>% mutate_at('group',~case_match(.,'0'~'Control','1'~'Intervention')) %>% ggplot(aes(time,100*est,ymin=100*(est-1.96*std),ymax=100*(est+1.96*std),colour=group,fill=group))+geom_path()+geom_ribbon(alpha=.2)+scale_x_continuous('Admission days at-risk',breaks=seq(0,300,25),expand=c(0,NA))+scale_y_continuous('Cumulative incidence (%)',breaks=seq(0,6,1),limits=c(0,7),expand=c(0,NA))+theme_bw()+g.theme
+gb<-ggcompetingrisks(cuminc.hap_c)$data %>% mutate_at('group',~case_match(.,'0'~'Control','1'~'Intervention')) %>% ggplot(aes(time,100*est,ymin=100*(est-1.96*std),ymax=100*(est+1.96*std),colour=group,fill=group))+geom_path()+geom_ribbon(alpha=.2)+scale_x_continuous('Admission days at-risk',breaks=seq(0,30,5),expand=c(0,NA))+scale_y_continuous('Cumulative incidence (%)',breaks=seq(0,6,1),expand=c(0,NA),limits=c(0,7))+theme_bw()+g.theme
+
+ggpubr::ggarrange(ga,gb,nrow=1,ncol=2,common.legend=T)
+
+
+
+```
+
+
+
+```{r cuminc-luri, fig.cap='Cumulative incidence of lower/upper respiratory infection by study condition',warning=F,fig.width=10}
+dat.cuminc_luri<-dat_atrisk_luri %>% slice_max(atrisk_day,by=record_id) %>% mutate(luri_c = if_else(atrisk_day<=30,luri,0),atrisk_day_c = pmin(30,atrisk_day))
+
+cuminc.luri<-with(dat.cuminc_luri,cuminc(atrisk_day,luri,group=intervention,strata=cluster)) 
+cuminc.luri_c<-with(dat.cuminc_luri,cuminc(atrisk_day_c,luri_c,group=intervention,strata=cluster)) 
+
+ga<-ggcompetingrisks(cuminc.luri)$data %>% mutate_at('group',~case_match(.,'0'~'Control','1'~'Intervention')) %>% ggplot(aes(time,100*est,ymin=100*(est-1.96*std),ymax=100*(est+1.96*std),colour=group,fill=group))+geom_path()+geom_ribbon(alpha=.2)+scale_x_continuous('Admission days at-risk',breaks=seq(0,300,25))+scale_y_continuous('Cumulative incidence (%)',breaks=seq(0,10,1))+theme_bw()+g.theme
+gb<-ggcompetingrisks(cuminc.luri_c)$data %>% mutate_at('group',~case_match(.,'0'~'Control','1'~'Intervention')) %>% ggplot(aes(time,100*est,ymin=100*(est-1.96*std),ymax=100*(est+1.96*std),colour=group,fill=group))+geom_path()+geom_ribbon(alpha=.2)+scale_x_continuous('Admission days at-risk',breaks=seq(0,30,5),expand=c(0,NA))+scale_y_continuous('Cumulative incidence (%)',breaks=seq(0,10,1),expand=c(0,NA))+theme_bw()+g.theme
+
+ggpubr::ggarrange(ga,gb,nrow=1,ncol=2,common.legend = T)
+```
+
+
+```{r cuminc-eent-oral, fig.cap='Cumulative incidence of EENT-Oral infection by study condition',warning=F,fig.width=10}
+dat.cuminc_eent_oral<-dat_atrisk_eent_oral %>% slice_max(atrisk_day,by=record_id) %>% mutate(eent_oral_c = if_else(atrisk_day<=30,eent_oral,0),atrisk_day_c = pmin(30,atrisk_day))
+
+cuminc.eent_oral<-with(dat.cuminc_eent_oral,cuminc(atrisk_day,eent_oral,group=intervention,strata=cluster)) 
+cuminc.eent_oral_c<-with(dat.cuminc_eent_oral,cuminc(atrisk_day_c,eent_oral_c,group=intervention,strata=cluster)) 
+
+
+ga<-ggcompetingrisks(cuminc.eent_oral)$data %>% mutate_at('group',~case_match(.,'0'~'Control','1'~'Intervention')) %>% ggplot(aes(time,100*est,ymin=100*(est-1.96*std),ymax=100*(est+1.96*std),colour=group,fill=group))+geom_path()+geom_ribbon(alpha=.2)+scale_x_continuous('Admission days at-risk',breaks=seq(0,300,25))+scale_y_continuous('Cumulative incidence (%)')+theme_bw()+g.theme
+
+gb<-ggcompetingrisks(cuminc.eent_oral_c)$data %>% mutate_at('group',~case_match(.,'0'~'Control','1'~'Intervention')) %>% filter(time<=30) %>% ggplot(aes(time,100*est,ymin=100*(est-1.96*std),ymax=100*(est+1.96*std),colour=group,fill=group))+geom_path()+geom_ribbon(alpha=.2)+scale_x_continuous('Admission days at-risk',breaks=seq(0,30,5),expand=c(0,NA))+scale_y_continuous('Cumulative incidence (%)',expand=c(0,NA))+theme_bw()+g.theme
+
+ggpubr::ggarrange(ga,gb,nrow=1,ncol=2,common.legend=T)
+```
+
+
+
+```{r, fig.cap='Cumulative proportion of HAP/LURI/EENT-Oral - time to first infection',warning=F,fig.width=10}
+dat.cuminc_hai<-dat_atrisk_hai %>% slice_max(atrisk_day,by=record_id) %>% mutate(hai_c = if_else(atrisk_day<=30,hai,0),atrisk_day_c = pmin(30,atrisk_day))
+
+cuminc.hai<-with(dat.cuminc_hai,cuminc(atrisk_day,hai,group=intervention,strata=cluster)) 
+cuminc.hai_c<-with(dat.cuminc_hai,cuminc(atrisk_day_c,hai_c,group=intervention,strata=cluster)) 
+
+ga<-ggcompetingrisks(cuminc.hai)$data %>% mutate_at('group',~case_match(.,'0'~'Control','1'~'Intervention')) %>% ggplot(aes(time,100*est,ymin=100*(est-1.96*std),ymax=100*(est+1.96*std),colour=group,fill=group))+geom_path()+geom_ribbon(alpha=.2)+scale_x_continuous('Admission days at-risk',breaks=seq(0,300,25))+scale_y_continuous('Cumulative incidence (%)',breaks=seq(0,60,10))+theme_bw()+g.theme
+gb<-ggcompetingrisks(cuminc.hai_c)$data %>% mutate_at('group',~case_match(.,'0'~'Control','1'~'Intervention')) %>% ggplot(aes(time,100*est,ymin=100*(est-1.96*std),ymax=100*(est+1.96*std),colour=group,fill=group))+geom_path()+geom_ribbon(alpha=.2)+scale_x_continuous('Admission days at-risk',breaks=seq(0,30,5),expand=c(0,NA))+scale_y_continuous('Cumulative incidence (%)',breaks=seq(0,20,2),expand=c(0,NA))+theme_bw()+g.theme
+
+ggpubr::ggarrange(ga,gb,nrow=1,ncol=2,common.legend=T)
+
+```
+
+
+# Primary outcome analysis
+
+The primary outcome is non-ventilator-associated hospital-acquired pneumonia (HAP). The primary outcome definition is the European Centre for Disease Control definition of HAP.
+
+The primary outcome was analysed at the patient-level and the cluster level. Patient-level analysis modelled the incidence of HAP adjusted for ward days at-risk.  The final ward day at-risk was defined as the date of infection onset (HAP) or the date of ward discharge (no HAP). 
+
+Cluster-level analysis modelling the number of new HAP events per 100 at-risk admissions, defined as total admissions and admission days at-risk. Model estimates are reported as incidence risk ratios with 95% confidence intervals and p-values.
+
+The main analysis included all study wards. Sensitivity analysis applied a leave-one-cluster-out analysis to assess the sensitivity of estimated intervention effectiveness.
+
+```{r}
+library(broom.mixed)
+load('model fits/hap_model_results_r1.rda')
+
+```
+
+
+
+## Patient-level analysis
+
+Table \@ref(tab:glmm-hap-patient) summarises main and sensitivity analysis results for HAP risk at the patient-level. Model estimates are reported as hazard ratios with 95% confidence intervals and p-values.
+
+
+Results are presented as hazard ratios with 95% confidence intervals for the main analysis where all clusters are included, and for leave-one-cluster-out sensitivity analysis.
+
+Quantities ending in _c correspond to results following post-correction for the number of clusters. (Degree of freedom correction, t distribution with total included clusters - 1 d.f.)
+
+```{r glmm-hap-patient,warning=FALSE}
+
+ftab <- tidy(mod.fit_hap[['patient:cloglog']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_hap[['patient:cloglog - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+ftab.loo <- lapply(mod.fit_hap[['patient:cloglog - loo']], function(x) tidy(x,component='cond',exponentiate = F,conf.int = T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic))
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded') 
+
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital')) %>%
+  mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Hazard ratio'=estimate)
+  
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of HAP; patient-level analysis",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+```
+
+
+## Cluster-level analysis
+
+
+Table \@ref(tab:glmm-hap-cluster-1) shows results of modelling the total number HAPs acquired per 100 ward admissions. For this analysis, patients are included in monthly denominators if they spent at least 1 day on the ward for a given month. Therefore, this analysis does not account for time spent on the ward.
+
+```{r glmm-hap-cluster-1,warning=FALSE}
+ftab <- tidy(mod.fit_hap[['cluster (total admissions):log']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_hap[['cluster (total admissions):log - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+
+ftab.loo <- lapply(mod.fit_hap[['cluster (total admissions):log - loo']], function(x) tidy(x,exponentiate=F,component='cond',conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)) 
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded')  
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital'))  %>% mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Incidence rate ratio'=estimate)
+
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of HAP; cluster-level analysis per 100 admissions",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+```
+
+
+Table \@ref(tab:glmm-hap-cluster-2) shows results of modelling the total number HAPs acquired per 100 at-risk admission days. For this analysis, total person-time per month divided by 100 was included as a model offset.
+
+```{r glmm-hap-cluster-2,warning=FALSE}
+ftab <- tidy(mod.fit_hap[['cluster (total admission days):log']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_hap[['cluster (total admission days):log - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+
+ftab.loo <- lapply(mod.fit_hap[['cluster (total admission days):log - loo']], function(x) tidy(x,exponentiate=F,component='cond',conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic))
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded')
+
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital')) %>% mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Incidence rate ratio'=estimate)
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of HAP; cluster-level analysis per 100 at-risk admission days",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+
+```
+
+For cluster-level analysis, the predicted number of infections during control and intervention conditions is given in \@ref(tab:pred-hap). Results are reported as point estimates with 95% confidence intervals.
+
+```{r pred-hap}
+ftab.pred_hap<- bind_rows(list('per 100 admissions'=mod.pred_hap[['cluster (total admissions):log']],
+                               'per 100 at-risk admission days'=mod.pred_hap[['cluster (total admission days):log']]),.id='Cluster-level analysis') %>%
+  mutate_at('x',~case_match(.,0~'Control',1~'Intervention')) %>%
+  mutate_at(c('predicted','conf.low','conf.high'),~signif(.x,2)) %>% unite('95% CI',c(conf.low,conf.high),sep=' - ') %>% unite(cell,c(predicted,`95% CI`),sep='; ') %>% select(`Cluster-level analysis`,x,cell) %>% pivot_wider(names_from=x,values_from = cell)
+
+
+knitr::kable(ftab.pred_hap, format = "html", escape = FALSE,caption="Results of oral care",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20)
+
+```
+
+
+# Secondary outcome analysis
+
+Secondary outcomes were respiratory tract (lower and upper combined) and EENT-O infections. Analysis followed the same process as per the primary outcome.
+
+## Lower and upper respiratory infections
+
+```{r}
+load('model fits/luri_model_results_r1.rda')
+
+```
+
+Patient-level analysis results are shown in Table \@ref(tab:glmm-luri-patient). Cluster-level analysis results are shown in Table \@ref(tab:glmm-luri-cluster-1) and Table \@ref(tab:glmm-luri-cluster-2).
+
+
+```{r glmm-luri-patient,warning=FALSE}
+ftab <- tidy(mod.fit_luri[['patient:cloglog']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_luri[['patient:cloglog - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+
+ftab.loo <- lapply(mod.fit_luri[['patient:cloglog - loo']], function(x) tidy(x,component='cond',exponentiate = F,conf.int = T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic))
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded')  
+
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital')) %>% mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Hazard ratio'=estimate)
+  
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of LURI; patient-level analysis",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+```
+
+
+```{r glmm-luri-cluster-1,warning=FALSE}
+ftab <- tidy(mod.fit_luri[['cluster (total admissions):log']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_luri[['cluster (total admissions):log - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+
+ftab.loo <- lapply(mod.fit_luri[['cluster (total admissions):log - loo']], function(x) tidy(x,exponentiate=F,component='cond',conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)) 
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded') 
+
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital')) %>% mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Incidence rate ratio'=estimate)
+
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of LURI; cluster-level analysis per 100 admissions",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+```
+
+
+```{r glmm-luri-cluster-2,warning=FALSE}
+ftab <- tidy(mod.fit_luri[['cluster (total admission days):log']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_luri[['cluster (total admission days):log - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+ftab.loo <- lapply(mod.fit_luri[['cluster (total admission days):log - loo']], function(x) tidy(x,exponentiate=F,component='cond',conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic))
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded')
+
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital')) %>% mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Incidence rate ratio'=estimate)
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of EENT-Oral; cluster-level analysis per 100 at-risk admission days",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+
+```
+
+
+
+## EENT-Oral
+
+```{r}
+load('model fits/eent_oral_model_results_r1.rda')
+
+```
+
+Patient-level analysis results are shown in Table \@ref(tab:glmm-eent-patient). Cluster-level analysis results are shown in Table \@ref(tab:glmm-eent-cluster-1) and Table \@ref(tab:glmm-eent-cluster-2).
+
+
+```{r glmm-eent-patient,warning=FALSE}
+ftab <- tidy(mod.fit_eent_oral[['patient:cloglog']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_eent_oral[['patient:cloglog - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+
+ftab.loo <- lapply(mod.fit_eent_oral[['patient:cloglog - loo']], function(x) tidy(x,component='cond',exponentiate = F,conf.int = T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic))
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded')  
+
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital')) %>% mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Hazard ratio'=estimate)
+  
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of EENT-Oral; patient-level analysis",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+```
+
+
+```{r glmm-eent-cluster-1,warning=FALSE}
+ftab <- tidy(mod.fit_eent_oral[['cluster (total admissions):log']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_eent_oral[['cluster (total admissions):log - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+
+ftab.loo <- lapply(mod.fit_eent_oral[['cluster (total admissions):log - loo']], function(x) tidy(x,exponentiate=F,component='cond',conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)) 
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded')  
+
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital')) %>% mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Incidence rate ratio'=estimate)
+
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of EENT-Oral; cluster-level analysis per 100 admissions",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+```
+
+
+```{r glmm-eent-cluster-2,warning=FALSE}
+ftab <- tidy(mod.fit_eent_oral[['cluster (total admission days):log']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic) %>% add_column('Cluster excluded' = 'None',.before=1)
+
+ftab.sens <- tidy(mod.fit_luri[['cluster (total admission days):log - sens']],component='cond',exponentiate=F,conf.int=T) %>% filter(effect=='fixed',grepl('intervention',term)) %>% select(term,estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+
+ftab.loo <- lapply(mod.fit_eent_oral[['cluster (total admission days):log - loo']], function(x) tidy(x,exponentiate=F,component='cond',conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,6)*std.error),conf.high_c=exp(estimate+qt(0.975,6)*std.error),p.value_c = 2*(1-pt(abs(statistic),6))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic))
+
+names(ftab.loo)<-cluster_vec
+ftab.loo <- bind_rows(ftab.loo,.id='Cluster excluded') 
+
+ftab<-bind_rows(ftab,ftab.sens,ftab.loo) %>%
+  mutate_at('Cluster excluded',~replace_na(.,'None - random intervention effect per hospital')) %>% mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(`Cluster excluded`,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('Incidence rate ratio'=estimate)
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness on the incidence of EENT-Oral; cluster-level analysis per 100 at-risk admission days",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20) %>% pack_rows("Main analysis",1,1) %>% pack_rows("Sensitivity analysis",2,11) 
+
+
+
+```
+
+
+
+# Tertiary outcome analysis
+
+For total infections, patient-level and cluster-level analysis results are shown in Table \@ref(tab:glmm-hai-results). 
+```{r}
+load('model fits/hai_model_results_r1.rda')
+```
+
+```{r glmm-hai-results,warning=FALSE}
+ftab<-NULL
+ftab[['Patient-level: 1+ infections during admission']] <- tidy(mod.fit_hai[['patient: 1+ infections during admission']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+ftab[['Cluster-level: infections per 100 admissions']] <- tidy(mod.fit_hai[['cluster (total admissions):log']],component='cond',exponentiate=F,conf.int=T) %>% filter(term=='intervention') %>% select(estimate,std.error,conf.low,conf.high,p.value,statistic) %>% mutate(conf.low_c=exp(estimate-qt(0.975,7)*std.error),conf.high_c=exp(estimate+qt(0.975,7)*std.error),p.value_c = 2*(1-pt(abs(statistic),7))) %>% mutate(across(c(estimate,conf.low,conf.high),~exp(.))) %>% select(-statistic)
+
+
+ftab<-bind_rows(ftab,.id='Analysis') %>%
+ mutate(across(where(is.numeric),~signif(.x,3))) %>% unite('95% CI',c('conf.low','conf.high'),sep=' - ',remove=FALSE)  %>% unite('95% CI_c',c('conf.low_c','conf.high_c'),sep=' - ',remove=FALSE) %>% select(Analysis,estimate,`95% CI`,p.value,`95% CI_c`,p.value_c) %>% rename('OR (patient-level)/IRR (cluster-level)'=estimate)
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Estimated intervention effectiveness for one or more infections during trial ward admission",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20)
+
+```
+
+
+
+Figure \@ref(fig:oral-care) summarises the monthly audit results on oral care, as a measure of intervention fidelity.
+
+
+```{r oral-care,fig.cap='Monthly distribution of oral care on the last day of a patients ward admission',fig.width=10,fig.height=10}
+dat_oral_care <- dat %>% left_join(select(cluster_time_mapping,cluster,date_daily,study_month_number),by=join_by(cluster,date_discharge_ward==date_daily),relationship='many-to-many') %>% count(cluster,oral_care_last_day,study_month_number) %>% mutate_at('oral_care_last_day',~replace_na(.,'Not recorded') %>% factor(.,levels=c('Yes','No','Not recorded')))
+
+
+ggplot(dat_oral_care %>% mutate_at('cluster',~paste('Cluster',.)),aes(study_month_number,n,fill=oral_care_last_day))+geom_bar(stat='identity',position='fill')+scale_x_continuous('Study month',breaks=1:15,expand=c(0,NA))+scale_y_continuous('Proportion of records',breaks=seq(0,1,0.1),expand=c(0,NA),labels=scales::percent)+facet_wrap(~cluster,nrow=3,ncol=3,scales='free_x')+theme_minimal()+g.theme
+
+```
+
+Tables \@ref(tab:est-oral-care-1) and \@ref(tab:est-oral-care-2) show descriptive statistics for oral care by control and intervention.
+
+```{r est-oral-care-1}
+#note one admission discharge on trial end date + 2 days with oral care documented - exclude
+dat_oral_care <- select(dat,record_id,cluster,date_discharge_ward,oral_care_last_day,oral_care_last_day_freq) %>% left_join(select(cluster_time_mapping,cluster,date_daily,study_month_number,intervention),by=join_by(cluster,date_discharge_ward==date_daily),relationship='many-to-many') %>% mutate_at('oral_care_last_day',~replace_na(.,'Not recorded')) %>% mutate_at('oral_care_last_day_freq',~as.numeric(.) %>% replace_na(.,0)) %>% mutate_at('intervention',~case_match(.,0~'Control',1~'Intervention') %>%  factor(.,levels=c('Control','Intervention'))) %>% filter(!is.na(intervention))
+
+
+#yes/no
+dat_oral_care <- dat_oral_care %>% mutate(oral_care_last_day_n = case_when(oral_care_last_day=='No'~0,oral_care_last_day=='Yes'~1))
+
+ftab<-filter(dat_oral_care,oral_care_last_day_n %in% 0:1) %>% reframe(n = sum(oral_care_last_day_n),'%'=round(100*mean(oral_care_last_day_n)),.by=intervention) %>% rename('Study period'=intervention)
+
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Descriptive statistics: oral care performed on the last day",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20)
+
+
+
+```
+
+```{r est-oral-care-2}
+ftab<-filter(dat_oral_care,oral_care_last_day_n==1) %>% reframe('Mean (SD)' = paste0(round(mean(oral_care_last_day_freq),1),' (',round(sd(oral_care_last_day_freq),1),')'),
+'Median (Q1 to Q3)'=paste0(median(oral_care_last_day_freq),'(',quantile(oral_care_last_day_freq,.25),' to ',quantile(oral_care_last_day_freq,.75),')'),.by=intervention) %>% rename('Study period'=intervention)
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Descriptive statistics: frequence of oral care on last day",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20)
+
+```
+
+Table \@ref(tab:est-oral-care-3) summarises the percentage of patients with documented oral care on the last day of their admission during control and intervention conditions, after adjusting for clustering. Among patients with documented oral care, the average times performed is also reported. Results are presented as point estimates with 95% confidence intervals. 
+
+
+```{r est-oral-care-3}
+
+
+mod.fit.0<-glmmTMB(oral_care_last_day_n~intervention+(1|cluster),data=dat_oral_care,family=binomial('logit'))
+
+dat_oral_care <- dat_oral_care %>% mutate_at('oral_care_last_day_n',~replace_na(.,0))
+mod.fit.0<-glmmTMB(oral_care_last_day_n~intervention+(1|cluster),data=dat_oral_care,family=binomial('logit'))
+
+mod.fit.1<-glmmTMB(oral_care_last_day_freq~intervention+(1|cluster),data=filter(dat_oral_care,oral_care_last_day %in% c('Yes')),family=poisson('log'))
+
+ftab<-NULL
+ftab[['Oral care performed, %']]<-predict_response(mod.fit.0,'intervention') %>% data.frame %>% mutate_at(c('predicted','conf.low','conf.high'),~signif(100*.x,2))
+ftab[['Average times oral care performed']]<-predict_response(mod.fit.1,'intervention') %>% data.frame %>% mutate_at(c('predicted','conf.low','conf.high'),~signif(.x,2))
+
+ftab<-bind_rows(ftab,.id='Outcome measure')  %>% unite('95% CI',c(conf.low,conf.high),sep=' to ') %>% unite(cell,c(predicted,`95% CI`),sep='; ') %>% select(`Outcome measure`,x,cell) %>% pivot_wider(names_from=x,values_from = cell)
+
+
+knitr::kable(ftab, format = "html", escape = FALSE,caption="Results of oral care",digits=3)  %>% kable_paper("striped",full_width = F, font_size = 20)
+
+
+```
